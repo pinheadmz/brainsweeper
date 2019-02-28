@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Brainwallet sweeper</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  </head>
+  <body style='text-align: center; font-size:22px;'>
+
+    <p>
+    <label for='phrase'>Brainwallet phrase: </label>
+    <input id='phrase' style='width:80%; font-size:22px;' oninput='parsePhrase()'>
+
+    <p>
+    <div>
+      SHA256 Hash: <span id='hash' style='font-family: monospace;'></span>
+    </div>
+
+    <p>
+    <div>
+      <table>
+        <tr>
+          <td>Type</td>
+          <td>Address</td>
+          <td>TX outputs</td>
+          <td>Balance</td>
+        </tr>
+        <tr>
+          <td>Uncompressed Legacy</td>
+          <td><span id='ucla' style='font-family: monospace;'></span></td>
+          <td><span id='ucla_utxo' style='font-family: monospace;'></span></td>
+          <td><span id='ucla_bal' style='font-family: monospace;'></span></td>
+        </tr>
+        <tr>
+          <td>Compressed Legacy</td>
+          <td><span id='cla' style='font-family: monospace;'></span></td>
+          <td><span id='cla_utxo' style='font-family: monospace;'></span></td>
+          <td><span id='cla_bal' style='font-family: monospace;'></span></td>
+        </tr>
+        <tr>
+          <td>SegWit</td>
+          <td><span id='swa' style='font-family: monospace;'></span></td>
+          <td><span id='swa_utxo' style='font-family: monospace;'></span></td>
+          <td><span id='swa_bal' style='font-family: monospace;'></span></td>
+        </tr>
+      </table>
+    </div>
+
+    <p>
+    <div>
+      UTXO:
+      <br>
+      <span id='utxo' style='font-family: monospace;'></span>
+    </div>
+
+    <p>
+      <label for='toAddr'>Destination Bitcoin address: </label>
+      <input id='toAddr' style='width:80%; font-size:22px; width: 600px' oninput='refreshUTXO()'>
+
+    <p>
+      <div>
+        <span id='error' style='color: red'></span>
+      </div>
+
+    <p>
+      <div id='output' style='color: green; font-family: monospace; width: 600px; word-break: break-all; margin: auto; border: 1px solid black'>
+      </div>
+      <br>
+      <button id='sendbutton' style='height:100px;width:200px;font-size:20px' onclick='sendTX()' disabled>Broadcast TX!</button>
+
+    <script type="text/javascript" src="sha256.js"></script>
+    <script type="text/javascript" src="buffer.js"></script>
+    <script type="text/javascript" src="bcoin.js"></script>
+    <script type="text/javascript">
+
+// Global
+let TXs = [];
+let addrs = [];
+let keys = [];
+
+function bufferFromString(string, format = 'ascii') {
+  return BUFFER.Buffer.from(string, format);
+}
+
+function parsePhrase() {
+  TXs = [];
+  addrs = [];
+  refreshUTXO();
+  document.getElementById('error').innerHTML = '';
+  document.getElementById('output').innerHTML = '';
+
+  const phrase = document.getElementById('phrase').value;
+  const buf = bufferFromString(phrase);
+  const hash = SHA256.digest(buf);
+  const hashString = hash.toString('hex');
+
+  document.getElementById('hash').innerHTML = hashString;
+
+  const compLegAddr = BCOIN.KeyRing.fromPrivate(hash, true).getAddress('base58');
+  const uncompLegAddr = BCOIN.KeyRing.fromPrivate(hash, false).getAddress('base58');
+  const ringWit = BCOIN.KeyRing.fromPrivate(hash, true);
+  ringWit.witness = true;
+  const swAddr = ringWit.getAddress('string')
+
+  addrs = [compLegAddr, uncompLegAddr, swAddr];
+  keys = [BCOIN.KeyRing.fromPrivate(hash, true), BCOIN.KeyRing.fromPrivate(hash, false), ringWit];
+
+  document.getElementById('ucla').innerHTML = `<a href='https://blockstream.info/address/${compLegAddr}' target='_blank'>${compLegAddr}`;
+  document.getElementById('cla').innerHTML = `<a href='https://blockstream.info/address/${uncompLegAddr}' target='_blank'>${uncompLegAddr}`;
+  document.getElementById('swa').innerHTML = `<a href='https://blockstream.info/address/${swAddr}' target='_blank'>${swAddr}`;
+
+  getAPI(compLegAddr, 'ucla');
+  getAPI(uncompLegAddr, 'cla');
+  getAPI(swAddr, 'swa');
+}
+
+function getAPI(addr, type){
+  fetch(`https://blockstream.info/api/address/${addr}`)
+    .then((response) => {
+      return response.json();
+    })
+    .then((json) => {
+      parseJSON(json, type);
+    })
+    .catch((e) => {
+      throw new Error(e);
+    });
+}
+
+function parseJSON(json, type) {
+  document.getElementById(type + '_utxo').innerHTML = json.chain_stats.funded_txo_count;
+  const bal = json.chain_stats.funded_txo_sum - json.chain_stats.spent_txo_sum
+  document.getElementById(type + '_bal').innerHTML = bal;
+
+  if (bal != 0)
+    getUTXO(json.address);
+}
+
+function getUTXO(addr) {
+  fetch(`https://blockstream.info/api/address/${addr}/txs`)
+    .then((response) => {
+      return response.json();
+    })
+    .then((json) => {
+      TXs = TXs.concat(json);
+      refreshUTXO();
+    })
+    .catch((e) => {
+      throw new Error(e);
+    });
+}
+
+function refreshUTXO(){
+  document.getElementById('error').innerHTML = '';
+  document.getElementById('output').innerHTML = '';
+  document.getElementById('utxo').innerHTML = '';
+  document.getElementById('sendbutton').setAttribute('disabled', true);
+
+  let mtx = new BCOIN.MTX();
+  let value = 0;
+  let inputs = [];
+
+  for (const tx of TXs){
+    for (let i = 0; i < tx.vout.length; i++){
+      if (addrs.includes(tx.vout[i].scriptpubkey_address)) {
+        const d = document.createElement('div');
+        d.innerHTML = tx.txid;
+        document.getElementById('utxo').appendChild(d);
+        const coin = BCOIN.Coin.fromJSON({
+          version: tx.version,
+          height: tx.status.block_height || -1,
+          value: tx.vout[i].value,
+          coinbase: false,
+          script: tx.vout[i].scriptpubkey,
+          hash: tx.txid,
+          index: i
+        });
+        mtx.addCoin(coin);
+        value += tx.vout[i].value;
+      }
+    }
+  }
+
+  if (value > 2000) {
+    try {
+      const toAddr = document.getElementById('toAddr').value;
+      if (!toAddr)
+        throw new Error('Input an address!');
+
+      mtx.addOutput({
+        address: toAddr,
+        value: value - 2000
+      })
+
+      mtx.sign(keys);
+
+      if(mtx.verify())
+        document.getElementById('sendbutton').removeAttribute('disabled');
+
+      const TX = mtx.toTX()
+      document.getElementById('output').innerHTML = TX.toRaw().toString('hex');
+    } catch(e) {
+      document.getElementById('error').innerHTML = e.message;
+    }
+  }
+}
+
+function sendTX(){
+  const rawTX = document.getElementById('output').innerHTML;
+
+  fetch(`https://blockstream.info/api/broadcast?tx=${rawTX}`, {mode: 'cors'})
+    .then((response) => {
+      return response.text();
+    })
+    .then((text) => {
+      alert(`Succesful broadcast: ${text}`);
+    })
+    .catch((e) => {
+      alert(`Error broadcasting tx: ${e.message}`);
+    });
+}
+    </script>
+    <style type="text/css">
+
+table, td {
+  border: 1px solid black;
+}
+
+table {
+  margin: auto;
+}
+
+    </style>
+  </body>
+</html>
