@@ -4,6 +4,8 @@
 
 ### Web browsers are insecure environments for cryptography!
 
+### [Brainwallets](https://en.bitcoin.it/wiki/Brainwallet) are a terrible idea and you could lose money!
+
 ### This tool is for entertainment purposes only! Use at your own risk!
 
 ![screenshot](https://raw.githubusercontent.com/pinheadmz/brainsweeper/master/brainsweeper_demo1.gif "demo")
